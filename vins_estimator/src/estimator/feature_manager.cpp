@@ -49,11 +49,22 @@ int FeatureManager::getFeatureCount()  // 返回观测次数超过4次的路标�
 }
 
 
+/**该函数的作用分为两个方面，首先就是将特征容器里特征按照一定的方式重新整理后加入到feature_manager中进行管理，
+ * 这里VF（VINS-Fusion缩写）与VM（VINS-MONO缩写）feature的管理方式基本是相同的，
+ * 唯一的区别在于FeaturePerFrame结构体中加入了右侧图像特征点的信息。
+ * 
+ * addFeatureCheckParallax
+ * 对当前帧与之前帧进行视差比较，如果是当前帧变化很小，就会删去倒数第二帧，如果变化很大，就删去最旧的帧。并把这一帧作为新的关键帧
+ * 这样也就保证了划窗内优化的,除了最后一帧可能不是关键帧外,其余的都是关键帧
+ * VINS里为了控制优化计算量，在实时情况下，只对当前帧之前某一部分帧进行优化，而不是全部历史帧。局部优化帧的数量就是窗口大小。
+ * 为了维持窗口大小，需要去除旧的帧添加新的帧，也就是边缘化 Marginalization。到底是删去最旧的帧（MARGIN_OLD）还是删去刚刚进来窗口倒数第二帧(MARGIN_SECOND_NEW)
+ * 如果大于最小像素,则返回true 
+**/
 bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double td)
 {
     ROS_DEBUG("input feature: %d", (int)image.size());
     ROS_DEBUG("num of feature: %d", getFeatureCount());
-    double parallax_sum = 0;
+    double parallax_sum = 0;//视差
     int parallax_num = 0;
     last_track_num = 0;
     last_average_parallax = 0;
@@ -212,7 +223,14 @@ void FeatureManager::triangulatePoint(Eigen::Matrix<double, 3, 4> &Pose0, Eigen:
     point_3d(2) = triangulated_point(2) / triangulated_point(3);
 }
 
+/**利用pnp求解位姿
+ *该代码断分为两部分，前部分先判断当前特征中那些已经三角化出深度的点，计算出世界系坐标存入pts3D，相应的当前帧的归一化平面坐标存入pts2D，
+ 之后由外参转化出上一阵的相机位姿，然后进行solvePoseByPnP运算，求解当前帧的位姿，以便后面的三角化，当然要转化成imu坐标系下的位姿。
+ solvePoseByPnP函数代码我就不贴在这里了，主要就是进行一系列的坐标系转化后，利用opencv自带的solvePnP函数解算位姿。
+ 如果对各位姿变化很懵，建议参考VM的博客慢慢从头推一遍。
 
+ * 
+ **/
 bool FeatureManager::solvePoseByPnP(Eigen::Matrix3d &R, Eigen::Vector3d &P, 
                                       vector<cv::Point2f> &pts2D, vector<cv::Point3f> &pts3D)
 {
@@ -256,6 +274,7 @@ bool FeatureManager::solvePoseByPnP(Eigen::Matrix3d &R, Eigen::Vector3d &P,
 
     return true;
 }
+
 
 void FeatureManager::initFramePoseByPnP(int frameCnt, Vector3d Ps[], Matrix3d Rs[], Vector3d tic[], Matrix3d ric[])
 {
@@ -302,6 +321,8 @@ void FeatureManager::initFramePoseByPnP(int frameCnt, Vector3d Ps[], Matrix3d Rs
     }
 }
 
+// 双目三角化
+// 结果放入了feature的estimated_depth中
 void FeatureManager::triangulate(int frameCnt, Vector3d Ps[], Matrix3d Rs[], Vector3d tic[], Matrix3d ric[])
 {
     for (auto &it_per_id : feature)
@@ -313,15 +334,15 @@ void FeatureManager::triangulate(int frameCnt, Vector3d Ps[], Matrix3d Rs[], Vec
         {
             int imu_i = it_per_id.start_frame;
             Eigen::Matrix<double, 3, 4> leftPose;  //第一帧，左相机到世界坐标系的位姿 tzhang
-            Eigen::Vector3d t0 = Ps[imu_i] + Rs[imu_i] * tic[0];
-            Eigen::Matrix3d R0 = Rs[imu_i] * ric[0];  //R_w_c  tzhang
+            Eigen::Vector3d t0 = Ps[imu_i] + Rs[imu_i] * tic[0];//利用imu的位姿
+            Eigen::Matrix3d R0 = Rs[imu_i] * ric[0];  //R_w_c  tzhang 利用imu的位姿计算左相机位姿
             leftPose.leftCols<3>() = R0.transpose();  //R_c_w
             leftPose.rightCols<1>() = -R0.transpose() * t0;
             //cout << "left pose " << leftPose << endl;
 
             Eigen::Matrix<double, 3, 4> rightPose;  //第一帧，右相机到世界坐标系的位姿 tzhang
             Eigen::Vector3d t1 = Ps[imu_i] + Rs[imu_i] * tic[1];
-            Eigen::Matrix3d R1 = Rs[imu_i] * ric[1];
+            Eigen::Matrix3d R1 = Rs[imu_i] * ric[1];//利用imu的位姿计算右相机位姿
             rightPose.leftCols<3>() = R1.transpose();
             rightPose.rightCols<1>() = -R1.transpose() * t1;
             //cout << "right pose " << rightPose << endl;
@@ -334,7 +355,7 @@ void FeatureManager::triangulate(int frameCnt, Vector3d Ps[], Matrix3d Rs[], Vec
             //cout << "point1 " << point1.transpose() << endl;
 
             triangulatePoint(leftPose, rightPose, point0, point1, point3d);  //基于SVD的路标点三角化 tzhang
-            Eigen::Vector3d localPoint;
+            Eigen::Vector3d localPoint; //得到imu坐标系下的三维点坐标
             localPoint = leftPose.leftCols<3>() * point3d + leftPose.rightCols<1>();  //计算该路标点在左相机的坐标  tzhang
             //TODO(tzhang)：还可以添加右相机的约束，来判别路标点深度初始化是否成功 tzhang
             double depth = localPoint.z();
