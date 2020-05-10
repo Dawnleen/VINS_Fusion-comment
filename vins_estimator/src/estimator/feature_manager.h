@@ -102,7 +102,7 @@ class FeatureManager  // 管理所有路标点信息
     void removeBack();
     void removeFront(int frame_count);
     void removeOutlier(set<int> &outlierIndex);
-    list<FeaturePerId> feature;
+    list<FeaturePerId> feature; //滑窗内所有的路标点
     int last_track_num;
     double last_average_parallax;
     int new_feature_num;
