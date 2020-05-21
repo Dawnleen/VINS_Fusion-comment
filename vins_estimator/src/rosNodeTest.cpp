@@ -202,11 +202,12 @@ void sync_process()
 
                     header = img0_buf.front()->header;
 
-                    image0 = getImageFromMsg(img0_buf.front());
+                    image0 = getImageFromMsg(img0_buf.front()); //转为mat类型
+
 
                     img0_buf.pop();
 
-                    image1 = getImageFromMsg(img1_buf.front());
+                    image1 = getImageFromMsg(img1_buf.front()); //转为mat类型
 
                     img1_buf.pop();
 
@@ -406,7 +407,7 @@ void imu_switch_callback(const std_msgs::BoolConstPtr &switch_msg)
 
         //ROS_WARN("use IMU!");
 
-        estimator.changeSensorType(1, STEREO);
+        estimator.changeSensorType(1, STEREO);//是否使用imu，如果没有重新初始化
 
     }
 
@@ -464,11 +465,11 @@ int main(int argc, char **argv)
 
 {
 
-    ros::init(argc, argv, "vins_estimator");
+    ros::init(argc, argv, "vins_estimator"); //初始化
 
-    ros::NodeHandle n("~");
+    ros::NodeHandle n("~"); //句柄
 
-    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
+    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info); //设置日志级别
 
 
 
